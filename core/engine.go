@@ -77,9 +77,14 @@ var CurrentVersion string
 var ErrAttachmentSendDisabled = errors.New("attachment send is disabled by config")
 
 // RestartRequest carries info needed to send a post-restart notification.
+//
+// Force=true tells the drain orchestrator to skip waiting for active turns.
+// It is set by `/restart force` (admin command) and is the same flag that the
+// signal path raises on a second SIGINT within ConsecutiveSigWindow.
 type RestartRequest struct {
 	SessionKey string `json:"session_key"`
 	Platform   string `json:"platform"`
+	Force      bool   `json:"force,omitempty"`
 }
 
 type replyFooterUsageCache struct {
@@ -286,6 +291,14 @@ type Engine struct {
 	// path, so no lock is required.
 	autoSessionName       string
 	autoSessionNameMaxLen int
+
+	// drainer manages graceful shutdown / restart (REQ-20260526-cc-connect-graceful-drain).
+	// May be nil when graceful drain is disabled. Hot-path readers use
+	// drainer.Load().IsDraining() which is nil-safe and lock-free.
+	//
+	// Stored as atomic.Pointer because /reload at runtime may swap the
+	// drainer concurrently with handleMessage reads (review P0-2).
+	drainer atomic.Pointer[Drainer]
 
 	// Multi-workspace mode
 	multiWorkspace    bool
@@ -804,6 +817,93 @@ func (e *Engine) SetAutoSessionName(mode string, maxLen int) {
 	}
 	e.autoSessionName = mode
 	e.autoSessionNameMaxLen = maxLen
+}
+
+// SetDrainConfig wires up the graceful-drain feature for this Engine.
+// Called once at startup (and on config reload) from main.go. Passing
+// DrainConfig{Enabled:false} disables the feature and removes any existing
+// drainer.
+//
+// The drainer pointer is stored atomically so concurrent handleMessage
+// readers and runtime /reload can race safely (review P0-2).
+func (e *Engine) SetDrainConfig(cfg DrainConfig) {
+	if !cfg.Enabled {
+		e.drainer.Store(nil)
+		return
+	}
+	e.drainer.Store(NewDrainer(e, cfg))
+}
+
+// Drainer returns the engine's graceful-drain controller, or nil when the
+// feature is disabled. Callers should treat nil as "drain disabled" and use
+// the legacy shutdown path. All Drainer methods are nil-safe.
+func (e *Engine) Drainer() *Drainer { return e.drainer.Load() }
+
+// AnyActive reports the engine's active-user signals for graceful drain.
+// Returns the count of busy sessions plus interactive states with pending
+// admin/permission/multi-step flows, whether any pending state exists, and
+// the most recent UpdatedAt across all sessions (used as the "no recent
+// activity" idle gate).
+//
+// Concurrency: takes interactiveMu briefly to count states, then releases
+// before iterating sessions (each session uses its own mutex). This avoids
+// the lock-inversion warned about in core/engine.go top comments.
+func (e *Engine) AnyActive() (count int, hasPending bool, lastUpdate time.Time) {
+	e.interactiveMu.Lock()
+	pendingCount := 0
+	for _, st := range e.interactiveStates {
+		if st == nil {
+			continue
+		}
+		if st.pending != nil ||
+			st.deleteMode != nil ||
+			st.modelSwitch != nil ||
+			st.pendingProviderAdd != nil {
+			pendingCount++
+		}
+	}
+	e.interactiveMu.Unlock()
+
+	busy := 0
+	var newest time.Time
+	if e.sessions != nil {
+		for _, s := range e.sessions.AllSessions() {
+			if s.Busy() {
+				busy++
+			}
+			if t := s.GetUpdatedAt(); t.After(newest) {
+				newest = t
+			}
+		}
+	}
+	return busy + pendingCount, pendingCount > 0, newest
+}
+
+// isInTurnPermissionResponse returns true when the incoming message belongs
+// to an in-flight session that is currently waiting for a user response
+// (e.g. permission approval, model-switch confirm). During graceful drain
+// such messages must pass through; otherwise the active turn would
+// deadlock awaiting an approval we silently dropped.
+//
+// Conservative: returns true only when an interactive state with a non-nil
+// blocking signal exists for sessionKey. Uses the same key-resolution
+// helper as the rest of the engine so multi-workspace deployments find
+// the canonical "<workspace>:<sessionKey>" entry.
+func (e *Engine) isInTurnPermissionResponse(sessionKey string) bool {
+	if sessionKey == "" {
+		return false
+	}
+	e.interactiveMu.Lock()
+	defer e.interactiveMu.Unlock()
+	key := e.interactiveKeyForSessionKeyLocked(sessionKey)
+	st, ok := e.interactiveStates[key]
+	if !ok || st == nil {
+		return false
+	}
+	return st.pending != nil ||
+		st.deleteMode != nil ||
+		st.modelSwitch != nil ||
+		st.pendingProviderAdd != nil
 }
 
 func (e *Engine) SetWebSetupFunc(fn func() (int, string, bool, error)) { e.webSetupFunc = fn }
@@ -2055,6 +2155,35 @@ func (e *Engine) handleMessage(p Platform, msg *Message) {
 	if msg.Recalled {
 		e.handleMessageRecall(p, msg)
 		return
+	}
+
+	// Graceful-drain gate (REQ-20260526-cc-connect-graceful-drain).
+	// During drain, reject brand-new messages but let two categories pass:
+	//
+	//  1. Permission responses on in-flight sessions — otherwise the
+	//     active turn would deadlock waiting for an approval we dropped.
+	//  2. /restart command (with or without "force") — admins must always
+	//     be able to escalate an already-running drain to force-mode
+	//     (review P0-3 / requirement.md AC6). The actual admin gate runs
+	//     in cmdRestart; we only let the message reach dispatch here.
+	if d := e.drainer.Load(); d != nil && d.IsDraining() {
+		content := strings.TrimSpace(msg.Content)
+		isRestartCmd := strings.HasPrefix(content, "/restart") &&
+			(len(content) == len("/restart") || content[len("/restart")] == ' ')
+		if !isRestartCmd && !e.isInTurnPermissionResponse(msg.SessionKey) {
+			text := d.Config().BusyMessage
+			if text == "" {
+				text = e.i18n.T(MsgServerDraining)
+			}
+			e.reply(p, msg.ReplyCtx, text)
+			slog.Info("message rejected: draining",
+				"project", e.name,
+				"platform", msg.Platform,
+				"session", msg.SessionKey,
+				"user", msg.UserName,
+			)
+			return
+		}
 	}
 
 	slog.Info("message received",
@@ -13144,13 +13273,77 @@ func (e *Engine) cmdConfigReload(p Platform, msg *Message) {
 }
 
 func (e *Engine) cmdRestart(p Platform, msg *Message) {
-	e.reply(p, msg.ReplyCtx, e.i18n.T(MsgRestarting))
+	// Parse "/restart [force]" — `force` skips graceful drain immediately.
+	force := false
+	if msg != nil {
+		args := strings.Fields(msg.Content)
+		if len(args) >= 2 && strings.EqualFold(args[1], "force") {
+			force = true
+		}
+	}
+
+	// If drain is already in flight (admin sent a second /restart while we
+	// were waiting), escalate to force when requested and stream progress.
+	// The first /restart call still needs to publish to RestartCh so main()
+	// observes the trigger and runs BeginDrain itself.
+	if d := e.drainer.Load(); d != nil && d.IsDraining() {
+		if force {
+			d.BeginDrain(true) // idempotent — escalates to force on existing drain
+			e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgDrainStarted, true))
+		} else {
+			// Re-issued without force: just re-emit progress so the admin
+			// gets a fresh "still draining; %d sessions, %s elapsed" line.
+			if snap := d.final.Load(); snap == nil {
+				count, _, _ := e.AnyActive()
+				e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgDrainProgress, count, time.Since(time.Unix(0, d.startedAt.Load())).Round(time.Second)))
+			}
+		}
+		return
+	}
+
+	if force {
+		e.reply(p, msg.ReplyCtx, e.i18n.Tf(MsgDrainStarted, true))
+	} else {
+		e.reply(p, msg.ReplyCtx, e.i18n.T(MsgRestarting))
+	}
+
+	// Kick off background progress streaming for the triggerer (review
+	// P1-3 / requirement.md AC4). Spawned BEFORE we publish to RestartCh
+	// so we don't miss early progress events.
+	go e.streamDrainProgress(p, msg.ReplyCtx)
+
 	select {
 	case RestartCh <- RestartRequest{
 		SessionKey: msg.SessionKey,
 		Platform:   p.Name(),
+		Force:      force,
 	}:
 	default:
+	}
+}
+
+// streamDrainProgress subscribes to drain progress and forwards each tick
+// to the /restart triggerer. Returns when the drain finishes (subscriber
+// channel closes) or when the drainer was never enabled (subscribe returns
+// an already-closed channel). Safe to call before BeginDrain — the
+// drainer waits internally for the trigger.
+func (e *Engine) streamDrainProgress(p Platform, replyCtx any) {
+	d := e.drainer.Load()
+	if d == nil {
+		return
+	}
+	sub := d.SubscribeProgress()
+	for evt := range sub {
+		if evt.Done {
+			return
+		}
+		// Avoid spamming when there's nothing to report yet.
+		if evt.ActiveSessions == 0 {
+			continue
+		}
+		e.reply(p, replyCtx, e.i18n.Tf(MsgDrainProgress,
+			evt.ActiveSessions,
+			evt.Elapsed.Round(time.Second)))
 	}
 }
 

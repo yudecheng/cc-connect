@@ -464,6 +464,9 @@ const (
 	MsgCommandDisabled   MsgKey = "command_disabled"
 	MsgAdminRequired     MsgKey = "admin_required"
 	MsgRateLimited       MsgKey = "rate_limited"
+	MsgServerDraining    MsgKey = "server_draining"
+	MsgDrainProgress     MsgKey = "drain_progress"
+	MsgDrainStarted      MsgKey = "drain_started"
 	MsgPsSent            MsgKey = "ps_sent"
 	MsgPsSendFailed      MsgKey = "ps_send_failed"
 	MsgPsEmpty           MsgKey = "ps_empty"
@@ -3145,6 +3148,27 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "⏳ 訊息發送過快，請稍後再試。",
 		LangJapanese:           "⏳ メッセージの送信が速すぎます。しばらくお待ちください。",
 		LangSpanish:            "⏳ Estás enviando mensajes demasiado rápido. Espera un momento.",
+	},
+	MsgServerDraining: {
+		LangEnglish:            "⚠️ Server is restarting. Please try again in a moment.",
+		LangChinese:            "⚠️ 服务正在重启，请稍后再试。",
+		LangTraditionalChinese: "⚠️ 服務正在重啟，請稍後再試。",
+		LangJapanese:           "⚠️ サーバーは再起動中です。しばらくしてから再度お試しください。",
+		LangSpanish:            "⚠️ El servidor se está reiniciando. Inténtalo de nuevo en un momento.",
+	},
+	MsgDrainStarted: {
+		LangEnglish:            "🔄 Restart requested. Waiting for active sessions to complete (force=%v).",
+		LangChinese:            "🔄 已收到重启请求，正在等待活跃会话完成（force=%v）。",
+		LangTraditionalChinese: "🔄 已收到重啟請求，正在等待活躍會話完成（force=%v）。",
+		LangJapanese:           "🔄 再起動要求を受信しました。アクティブなセッションの完了を待機中です（force=%v）。",
+		LangSpanish:            "🔄 Solicitud de reinicio recibida. Esperando a que las sesiones activas finalicen (force=%v).",
+	},
+	MsgDrainProgress: {
+		LangEnglish:            "⏳ Drain in progress: %d active session(s), elapsed %s.",
+		LangChinese:            "⏳ 优雅退出中：%d 个活跃会话，已等 %s。",
+		LangTraditionalChinese: "⏳ 優雅退出中：%d 個活躍會話，已等 %s。",
+		LangJapanese:           "⏳ ドレイン中：%d 件のアクティブセッション、経過時間 %s。",
+		LangSpanish:            "⏳ Drenado en curso: %d sesión(es) activa(s), tiempo transcurrido %s.",
 	},
 	MsgPsSent: {
 		LangEnglish:            "✅ P.S. delivered.",

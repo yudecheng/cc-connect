@@ -418,6 +418,29 @@ type ProjectConfig struct {
 	// AutoSessionNameMaxLen caps the auto-generated title rune length.
 	// Default 28 covers Chinese / English short titles comfortably.
 	AutoSessionNameMaxLen int `toml:"auto_session_name_max_len,omitempty"`
+
+	// GracefulDrain controls behavior when the engine is asked to shut
+	// down or restart while users have active turns. When Enabled=true,
+	// /restart and SIGINT/SIGTERM enter a drain phase that waits for
+	// active turns to complete (or hits a timeout) before proceeding.
+	// New messages arriving during drain are rejected with a friendly
+	// busy_message. See requirement/2026-05-26-cc-connect-graceful-drain.
+	GracefulDrain GracefulDrainConfig `toml:"graceful_drain,omitempty"`
+}
+
+// GracefulDrainConfig is the per-project graceful-drain config block.
+//
+// Pointer fields use `omitempty` and are interpreted as "use default" when
+// nil; a real explicit zero must be written as e.g. `idle_minutes = 0`
+// (which still resolves to the default in core.DrainConfig.applyDefaults).
+type GracefulDrainConfig struct {
+	Enabled                 bool   `toml:"enabled,omitempty"`
+	IdleMinutes             *int   `toml:"idle_minutes,omitempty"`
+	MaxWaitMinutes          *int   `toml:"max_wait_minutes,omitempty"`
+	NewMessagePolicy        string `toml:"new_message_policy,omitempty"`
+	BusyMessage             string `toml:"busy_message,omitempty"`
+	PollIntervalSeconds     *int   `toml:"poll_interval_seconds,omitempty"`
+	ProgressIntervalSeconds *int   `toml:"progress_interval_seconds,omitempty"`
 }
 
 type AgentConfig struct {

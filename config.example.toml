@@ -666,6 +666,40 @@ name = "my-backend"
 # auto_session_name = "first_message"
 # auto_session_name_max_len = 28
 #
+# graceful_drain: wait for active turns to complete before /restart or
+# SIGINT/SIGTERM tear down the engine. Avoids interrupting in-flight
+# conversations on shared dev machines. New messages arriving during drain
+# are rejected with a friendly busy_message.
+#
+# Triggers: /restart command, SIGINT, SIGTERM.
+# Force-skip: `/restart force`, or send a second SIGINT within ~5s.
+# Default behavior (block omitted) = disabled (legacy: shut down immediately).
+#
+# [graceful_drain]
+# enabled = true
+# idle_minutes = 5                  # require N min of "no recent activity" before declaring done
+# max_wait_minutes = 30             # hard cap; force shutdown after this even if active
+# new_message_policy = "reject"     # only "reject" supported now
+# busy_message = ""                 # empty = use built-in i18n message
+# poll_interval_seconds = 5         # how often to evaluate active sessions
+# progress_interval_seconds = 30    # how often to push progress to /restart triggerer
+#
+# graceful_drain：在 /restart 或 SIGINT/SIGTERM 触发关停前，等待活跃会话完成，
+# 避免在公共开发机上打断在线对话。drain 期间到达的新消息会用友好文案拒绝。
+#
+# 触发：/restart 命令、SIGINT、SIGTERM。
+# 强制跳过：`/restart force`，或 ~5s 内连续两次 SIGINT。
+# 默认行为（不写本块）= 关闭（兼容旧行为：立即关停）。
+#
+# [graceful_drain]
+# enabled = true
+# idle_minutes = 5                  # 连续 N 分钟无新活跃才算 idle
+# max_wait_minutes = 30             # drain 上限；超过后强制关停
+# new_message_policy = "reject"     # 目前仅支持 "reject"
+# busy_message = ""                 # 空 = 使用内置 i18n 文案
+# poll_interval_seconds = 5         # 活跃判定 tick 周期
+# progress_interval_seconds = 30    # 给 /restart 触发者推送进度的周期
+#
 # admin_from controls who can run privileged commands (/dir, /shell, /restart, /upgrade, /commands addexec).
 # admin_from 控制谁可以执行特权命令（/dir, /shell, /restart, /upgrade, /commands addexec）。
 #
