@@ -590,12 +590,39 @@ func (p *Platform) onCardAction(event *callback.CardActionTriggerEvent) (*callba
 			}, nil
 		}
 		if p.cardNavHandler != nil {
-			card := p.cardNavHandler(actionVal, sessionKey)
-			if card != nil {
+			done := make(chan *core.Card, 1)
+			go func() {
+				done <- p.cardNavHandler(actionVal, sessionKey)
+			}()
+
+			select {
+			case card := <-done:
+				if card != nil {
+					return &callback.CardActionTriggerResponse{
+						Card: &callback.Card{
+							Type: "raw",
+							Data: renderCardMap(card, sessionKey),
+						},
+					}, nil
+				}
+			case <-time.After(cardNavTimeout):
+				// Slow path: tell user we're loading, finish the work async.
+				// Restored from upstream PR #907 (f58e757), dropped by 23be94f.
+				go func() {
+					card := <-done
+					if card == nil {
+						return
+					}
+					if refresher, ok := p.self.(core.CardRefresher); ok {
+						if err := refresher.RefreshCard(context.Background(), sessionKey, card); err != nil {
+							slog.Warn(p.tag()+": async card refresh failed", "action", actionVal, "err", err)
+						}
+					}
+				}()
 				return &callback.CardActionTriggerResponse{
-					Card: &callback.Card{
-						Type: "raw",
-						Data: renderCardMap(card, sessionKey),
+					Toast: &callback.Toast{
+						Type:    "info",
+						Content: "⏳ Loading... / 加载中...",
 					},
 				}, nil
 			}
@@ -854,6 +881,16 @@ func (p *Platform) StreamingEmojis() (editing, failed, completed string) {
 }
 
 const recalledMessageTTL = 10 * time.Minute
+
+// cardNavTimeout caps the synchronous wait for cardNavHandler before we fall
+// back to a "loading" toast and refresh the card asynchronously via Patch API.
+// Feishu's interactive callback timeout is 3 seconds; we leave a 500ms margin
+// for network + serialization to avoid the user-visible "回调超时未响应" toast.
+//
+// Restored from upstream PR #907 (commit f58e757) which was inadvertently
+// dropped during 23be94f "magicmatrix-aigen vendor parity" on 2026-05-18.
+// See requirement/2026-05-27-cc-connect-card-nav-timeout-fix/ for context.
+const cardNavTimeout = 2500 * time.Millisecond
 
 func (p *Platform) markMessageRecalled(messageID string) {
 	messageID = strings.TrimSpace(messageID)
