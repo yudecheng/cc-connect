@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -326,6 +327,7 @@ func main() {
 		engine.SetAttachmentSendEnabled(cfg.AttachmentSend != "off")
 		engine.SetFilterExternalSessions(proj.FilterExternalSessions != nil && *proj.FilterExternalSessions)
 		engine.SetAutoSessionName(proj.AutoSessionName, proj.AutoSessionNameMaxLen)
+		engine.SetDrainConfig(toDrainConfig(proj.GracefulDrain))
 		engine.SetBaseWorkDir(workDir)
 		engine.SetProjectStateStore(projectState)
 
@@ -1129,13 +1131,76 @@ func main() {
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	// signal.Stop after shutdown so any straggler signals do not bleed
+	// into the post-Stop teardown / restart-process path (review P1-4).
+	defer signal.Stop(sigCh)
 
+	// Wait for shutdown trigger.
 	var restartReq *core.RestartRequest
+	var force bool
 	select {
 	case <-sigCh:
 	case req := <-core.RestartCh:
 		restartReq = &req
-		slog.Info("restart requested via /restart command", "session", req.SessionKey, "platform", req.Platform)
+		force = req.Force
+		slog.Info("restart requested via /restart command",
+			"session", req.SessionKey, "platform", req.Platform, "force", req.Force)
+	}
+
+	// Graceful drain (REQ-20260526-cc-connect-graceful-drain).
+	//
+	// Drain waits for active turns to finish before we begin tearing down
+	// platform servers (so busy_message replies can still go out, and so
+	// in-flight permission responses can land). When all engines have
+	// drainers configured (Enabled=true), this blocks for up to
+	// max_wait_minutes; when Enabled=false the BeginDrain call returns an
+	// already-closed channel and we proceed immediately.
+	//
+	// While drain is in flight, a second SIGINT within ~5s upgrades to
+	// force-mode (skip the wait) — same semantics as `/restart force`.
+	hasDrainEnabled := false
+	for _, e := range engines {
+		if e.Drainer() != nil {
+			hasDrainEnabled = true
+			break
+		}
+	}
+	if hasDrainEnabled {
+		slog.Info("draining...", "force", force)
+		var wg sync.WaitGroup
+		for _, e := range engines {
+			d := e.Drainer()
+			if d == nil {
+				continue
+			}
+			wg.Add(1)
+			doneCh := d.BeginDrain(force)
+			go func(ch <-chan struct{}) {
+				defer wg.Done()
+				<-ch
+			}(doneCh)
+		}
+		// Watch for second signal → escalate to force on every drainer.
+		// Goroutine exits naturally once wg.Done() unblocks the main wait.
+		drainOver := make(chan struct{})
+		go func() {
+			for {
+				select {
+				case sig := <-sigCh:
+					slog.Warn("second signal during drain; forcing", "signal", sig)
+					for _, e := range engines {
+						if d := e.Drainer(); d != nil {
+							d.BeginDrain(true)
+						}
+					}
+				case <-drainOver:
+					return
+				}
+			}
+		}()
+		wg.Wait()
+		close(drainOver)
+		slog.Info("drain complete")
 	}
 
 	slog.Info("shutting down...")
@@ -1565,6 +1630,9 @@ func reloadConfig(configPath, projName string, engine *core.Engine) (*core.Confi
 	// Reload auto_session_name
 	engine.SetAutoSessionName(proj.AutoSessionName, proj.AutoSessionNameMaxLen)
 
+	// Reload graceful_drain
+	engine.SetDrainConfig(toDrainConfig(proj.GracefulDrain))
+
 	// Reload providers
 	if ps, ok := engine.GetAgent().(core.ProviderSwitcher); ok {
 		providers := make([]core.ProviderConfig, len(proj.Agent.Providers))
@@ -1643,6 +1711,31 @@ func buildUserRoleManager(uc *config.UsersConfig) *core.UserRoleManager {
 	urm := core.NewUserRoleManager()
 	urm.Configure(defaultRole, roles)
 	return urm
+}
+
+// toDrainConfig converts the per-project [graceful_drain] TOML block to
+// core.DrainConfig. Pointer fields default to zero (which core's
+// applyDefaults then maps to the documented defaults). Defined here in cmd
+// to keep config/ free of any core/ dependency.
+func toDrainConfig(g config.GracefulDrainConfig) core.DrainConfig {
+	cfg := core.DrainConfig{
+		Enabled:          g.Enabled,
+		NewMessagePolicy: g.NewMessagePolicy,
+		BusyMessage:      g.BusyMessage,
+	}
+	if g.IdleMinutes != nil {
+		cfg.IdleDuration = time.Duration(*g.IdleMinutes) * time.Minute
+	}
+	if g.MaxWaitMinutes != nil {
+		cfg.MaxWaitDuration = time.Duration(*g.MaxWaitMinutes) * time.Minute
+	}
+	if g.PollIntervalSeconds != nil {
+		cfg.PollInterval = time.Duration(*g.PollIntervalSeconds) * time.Second
+	}
+	if g.ProgressIntervalSeconds != nil {
+		cfg.ProgressInterval = time.Duration(*g.ProgressIntervalSeconds) * time.Second
+	}
+	return cfg
 }
 
 func configProviderToCore(p config.ProviderConfig) core.ProviderConfig {
