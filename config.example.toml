@@ -1266,8 +1266,12 @@ app_secret = "your-feishu-app-secret"
 # =============================================================================
 # Project 2: Using Cursor Agent / 项目 2：使用 Cursor Agent (uncomment to enable / 取消注释以启用)
 # =============================================================================
-# Requires: Cursor Agent CLI (`agent`) — install via Cursor IDE or `npm i -g @anthropic-ai/cursor-agent`
-# 需要安装：Cursor Agent CLI (`agent`) — 通过 Cursor IDE 或 npm 安装
+# Requires: Cursor Agent CLI (`agent`) — install: `curl https://cursor.com/install -fsS | bash`
+#           (Windows PowerShell: `irm 'https://cursor.com/install?win32=true' | iex`),
+#           then run `agent login`. Docs: https://cursor.com/docs/cli/installation
+# 需要安装：Cursor Agent CLI (`agent`) — 安装：`curl https://cursor.com/install -fsS | bash`
+#           （Windows PowerShell：`irm 'https://cursor.com/install?win32=true' | iex`），
+#           然后执行 `agent login` 登录 Cursor 账号。文档：https://cursor.com/docs/cli/installation
 # Uses `agent --print --output-format stream-json` under the hood.
 # 底层使用 `agent --print --output-format stream-json` 命令。
 
@@ -1602,7 +1606,7 @@ app_secret = "your-feishu-app-secret"
 # 针对 Devin 建议直接使用上面的 type = "devin"；下面的 type = "acp" 主要给其他
 # 通用 ACP 工具使用。
 
-# --- Example: Cursor Agent CLI (npm: @anthropic-ai/cursor-agent) ---
+# --- Example: Cursor Agent CLI (install: curl https://cursor.com/install -fsS | bash) ---
 # [[projects]]
 # name = "cursor-acp"
 #
