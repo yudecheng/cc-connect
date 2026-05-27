@@ -53,7 +53,7 @@ func New(opts map[string]any) (core.Agent, error) {
 		cmd = "agent"
 	}
 	if _, err := exec.LookPath(cmd); err != nil {
-		return nil, fmt.Errorf("cursor: %q CLI not found in PATH, install with: npm i -g @anthropic-ai/cursor-agent (or from Cursor IDE settings)", cmd)
+		return nil, fmt.Errorf("cursor: %q CLI not found in PATH, install with: curl https://cursor.com/install -fsS | bash (macOS/Linux/WSL) or 'irm https://cursor.com/install?win32=true | iex' (Windows PowerShell); then run 'agent login'. See https://cursor.com/docs/cli/installation", cmd)
 	}
 
 	return &Agent{
