@@ -1298,6 +1298,15 @@ app_secret = "your-feishu-app-secret"
 # Optional: specify a model / 可选：指定模型
 # model = "claude-sonnet-4-20250514"
 #
+# Optional: prepend instructions only when cc-connect creates a new Cursor
+# session. Existing sessions resumed via --resume do not receive this again.
+# Use prompt_prefix for short inline text, or session_init_prompt_file for a
+# longer rule file. Relative files are resolved against work_dir.
+# 可选：仅在 cc-connect 创建新的 Cursor 会话时注入首轮提示；resume 旧会话时不重复注入。
+# prompt_prefix 适合短文本，session_init_prompt_file 适合较长规则文件；相对路径按 work_dir 解析。
+# prompt_prefix = "Do not use AskQuestion; ask in plain text instead."
+# session_init_prompt_file = "config/cc-connect/rules/no-askquestion.mdc"
+#
 # Alternative: use the persistent Cursor SDK sidecar instead of launching the
 # Cursor CLI for every turn. This requires a Node 18+ runtime, @cursor/sdk
 # available to the sidecar process (for example in the sidecar directory or via

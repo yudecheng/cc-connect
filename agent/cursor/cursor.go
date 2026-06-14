@@ -30,14 +30,15 @@ func init() {
 //   - "plan":     --trust --mode plan (read-only analysis)
 //   - "ask":      --trust --mode ask (Q&A style, read-only)
 type Agent struct {
-	workDir    string
-	model      string
-	mode       string
-	cmd        string // CLI binary name, default "agent"
-	providers  []core.ProviderConfig
-	activeIdx  int
-	sessionEnv []string
-	mu         sync.RWMutex
+	workDir           string
+	model             string
+	mode              string
+	cmd               string // CLI binary name, default "agent"
+	sessionInitPrompt string
+	providers         []core.ProviderConfig
+	activeIdx         int
+	sessionEnv        []string
+	mu                sync.RWMutex
 }
 
 func New(opts map[string]any) (core.Agent, error) {
@@ -55,14 +56,42 @@ func New(opts map[string]any) (core.Agent, error) {
 	if _, err := exec.LookPath(cmd); err != nil {
 		return nil, fmt.Errorf("cursor: %q CLI not found in PATH, install with: curl https://cursor.com/install -fsS | bash (macOS/Linux/WSL) or 'irm https://cursor.com/install?win32=true | iex' (Windows PowerShell); then run 'agent login'. See https://cursor.com/docs/cli/installation", cmd)
 	}
+	sessionInitPrompt, err := loadSessionInitPrompt(workDir, opts)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Agent{
-		workDir:   workDir,
-		model:     model,
-		mode:      mode,
-		cmd:       cmd,
-		activeIdx: -1,
+		workDir:           workDir,
+		model:             model,
+		mode:              mode,
+		cmd:               cmd,
+		sessionInitPrompt: sessionInitPrompt,
+		activeIdx:         -1,
 	}, nil
+}
+
+func loadSessionInitPrompt(workDir string, opts map[string]any) (string, error) {
+	var parts []string
+	if prefix, _ := opts["prompt_prefix"].(string); strings.TrimSpace(prefix) != "" {
+		parts = append(parts, strings.TrimSpace(prefix))
+	}
+
+	if rawPath, _ := opts["session_init_prompt_file"].(string); strings.TrimSpace(rawPath) != "" {
+		path := strings.TrimSpace(rawPath)
+		if !filepath.IsAbs(path) {
+			path = filepath.Join(workDir, path)
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("cursor: read session_init_prompt_file %q: %w", path, err)
+		}
+		if content := strings.TrimSpace(string(data)); content != "" {
+			parts = append(parts, content)
+		}
+	}
+
+	return strings.Join(parts, "\n\n"), nil
 }
 
 func normalizeMode(raw string) string {
@@ -77,7 +106,6 @@ func normalizeMode(raw string) string {
 		return "default"
 	}
 }
-
 
 func (a *Agent) Name() string           { return "cursor" }
 func (a *Agent) CLIBinaryName() string  { return "agent" }
@@ -193,6 +221,7 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	model := a.model
 	mode := a.mode
 	cmd := a.cmd
+	sessionInitPrompt := a.sessionInitPrompt
 	extraEnv := a.providerEnvLocked()
 	extraEnv = append(extraEnv, a.sessionEnv...)
 	if a.activeIdx >= 0 && a.activeIdx < len(a.providers) {
@@ -202,7 +231,7 @@ func (a *Agent) StartSession(ctx context.Context, sessionID string) (core.AgentS
 	}
 	a.mu.Unlock()
 
-	return newCursorSession(ctx, cmd, a.workDir, model, mode, sessionID, extraEnv)
+	return newCursorSession(ctx, cmd, a.workDir, model, mode, sessionID, extraEnv, sessionInitPrompt)
 }
 
 // ListSessions reads sessions from ~/.cursor/chats/<workspace_hash>/.
