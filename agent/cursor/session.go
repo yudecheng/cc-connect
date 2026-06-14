@@ -29,33 +29,36 @@ import (
 // cursorSession manages multi-turn conversations with the Cursor Agent CLI.
 // Each Send() launches a new `agent --print` process with --resume for continuity.
 type cursorSession struct {
-	cmd      string // CLI binary name
-	workDir  string
-	model    string
-	mode     string
-	extraEnv []string
-	events   chan core.Event
-	chatID   atomic.Value // stores string — Cursor chat/session ID
-	ctx      context.Context
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
-	alive    atomic.Bool
+	cmd               string // CLI binary name
+	workDir           string
+	model             string
+	mode              string
+	extraEnv          []string
+	sessionInitPrompt string
+	events            chan core.Event
+	chatID            atomic.Value // stores string — Cursor chat/session ID
+	ctx               context.Context
+	cancel            context.CancelFunc
+	wg                sync.WaitGroup
+	alive             atomic.Bool
+	initPromptUsed    atomic.Bool
 
 	thinkingBuf strings.Builder // accumulate thinking deltas
 }
 
-func newCursorSession(ctx context.Context, cmd, workDir, model, mode, resumeID string, extraEnv []string) (*cursorSession, error) {
+func newCursorSession(ctx context.Context, cmd, workDir, model, mode, resumeID string, extraEnv []string, sessionInitPrompt string) (*cursorSession, error) {
 	sessionCtx, cancel := context.WithCancel(ctx)
 
 	cs := &cursorSession{
-		cmd:      cmd,
-		workDir:  workDir,
-		model:    model,
-		mode:     mode,
-		extraEnv: extraEnv,
-		events:   make(chan core.Event, 64),
-		ctx:      sessionCtx,
-		cancel:   cancel,
+		cmd:               cmd,
+		workDir:           workDir,
+		model:             model,
+		mode:              mode,
+		extraEnv:          extraEnv,
+		sessionInitPrompt: strings.TrimSpace(sessionInitPrompt),
+		events:            make(chan core.Event, 64),
+		ctx:               sessionCtx,
+		cancel:            cancel,
 	}
 	cs.alive.Store(true)
 
@@ -84,6 +87,7 @@ func (cs *cursorSession) Send(prompt string, images []core.ImageAttachment, file
 
 	chatID := cs.CurrentSessionID()
 	isResume := chatID != ""
+	prompt = cs.applySessionInitPrompt(prompt, isResume)
 
 	args := []string{
 		"--print",
@@ -134,6 +138,24 @@ func (cs *cursorSession) Send(prompt string, images []core.ImageAttachment, file
 	go cs.readLoop(cmd, stdout, &stderrBuf)
 
 	return nil
+}
+
+func prependSessionInitPrompt(initPrompt, prompt string) string {
+	initPrompt = strings.TrimSpace(initPrompt)
+	if initPrompt == "" {
+		return prompt
+	}
+	return initPrompt + "\n\n---\n\n" + prompt
+}
+
+func (cs *cursorSession) applySessionInitPrompt(prompt string, isResume bool) string {
+	if isResume || cs.sessionInitPrompt == "" {
+		return prompt
+	}
+	if !cs.initPromptUsed.CompareAndSwap(false, true) {
+		return prompt
+	}
+	return prependSessionInitPrompt(cs.sessionInitPrompt, prompt)
 }
 
 func saveCursorImagesToDisk(workDir string, images []core.ImageAttachment) ([]string, error) {

@@ -130,6 +130,88 @@ func TestAvailableModels_FetchFromAgent(t *testing.T) {
 	}
 }
 
+func TestLoadSessionInitPrompt_InlineAndFile(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(workDir, "rules"), 0o755); err != nil {
+		t.Fatalf("mkdir rules: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "rules", "init.md"), []byte("File rule\n"), 0o644); err != nil {
+		t.Fatalf("write init prompt file: %v", err)
+	}
+
+	got, err := loadSessionInitPrompt(workDir, map[string]any{
+		"prompt_prefix":            "Inline rule",
+		"session_init_prompt_file": "rules/init.md",
+	})
+	if err != nil {
+		t.Fatalf("loadSessionInitPrompt returned error: %v", err)
+	}
+	want := "Inline rule\n\nFile rule"
+	if got != want {
+		t.Fatalf("session init prompt = %q, want %q", got, want)
+	}
+}
+
+func TestLoadSessionInitPrompt_MissingFile(t *testing.T) {
+	_, err := loadSessionInitPrompt(t.TempDir(), map[string]any{
+		"session_init_prompt_file": "missing.md",
+	})
+	if err == nil {
+		t.Fatal("expected missing session_init_prompt_file to return an error")
+	}
+}
+
+func TestNewLoadsSessionInitPrompt(t *testing.T) {
+	workDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workDir, "init.md"), []byte("File rule"), 0o644); err != nil {
+		t.Fatalf("write init prompt file: %v", err)
+	}
+	cmd, err := os.Executable()
+	if err != nil {
+		t.Fatalf("os.Executable: %v", err)
+	}
+
+	agentAny, err := New(map[string]any{
+		"cmd":                      cmd,
+		"work_dir":                 workDir,
+		"prompt_prefix":            "Inline rule",
+		"session_init_prompt_file": "init.md",
+	})
+	if err != nil {
+		t.Fatalf("New returned error: %v", err)
+	}
+	agent := agentAny.(*Agent)
+	if got, want := agent.sessionInitPrompt, "Inline rule\n\nFile rule"; got != want {
+		t.Fatalf("sessionInitPrompt = %q, want %q", got, want)
+	}
+}
+
+func TestApplySessionInitPrompt_NewSessionOnce(t *testing.T) {
+	cs := &cursorSession{sessionInitPrompt: "Rule"}
+
+	first := cs.applySessionInitPrompt("Hello", false)
+	if first != "Rule\n\n---\n\nHello" {
+		t.Fatalf("first prompt = %q", first)
+	}
+
+	second := cs.applySessionInitPrompt("Again", false)
+	if second != "Again" {
+		t.Fatalf("second prompt = %q, want no repeated init prompt", second)
+	}
+}
+
+func TestApplySessionInitPrompt_ResumeSkips(t *testing.T) {
+	cs := &cursorSession{sessionInitPrompt: "Rule"}
+
+	got := cs.applySessionInitPrompt("Continue", true)
+	if got != "Continue" {
+		t.Fatalf("resume prompt = %q, want no init prompt", got)
+	}
+	if cs.initPromptUsed.Load() {
+		t.Fatal("resume should not mark init prompt as used")
+	}
+}
+
 func TestSaveCursorImagesToDisk(t *testing.T) {
 	workDir := t.TempDir()
 
