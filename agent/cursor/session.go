@@ -37,6 +37,7 @@ type cursorSession struct {
 	sessionInitPrompt string
 	events            chan core.Event
 	chatID            atomic.Value // stores string — Cursor chat/session ID
+	autoModel         atomic.Bool
 	ctx               context.Context
 	cancel            context.CancelFunc
 	wg                sync.WaitGroup
@@ -85,6 +86,10 @@ func (cs *cursorSession) Send(prompt string, images []core.ImageAttachment, file
 		return fmt.Errorf("session is closed")
 	}
 
+	return cs.start(prompt, true)
+}
+
+func (cs *cursorSession) start(prompt string, retryModelUnavailable bool) error {
 	chatID := cs.CurrentSessionID()
 	isResume := chatID != ""
 	prompt = cs.applySessionInitPrompt(prompt, isResume)
@@ -107,7 +112,7 @@ func (cs *cursorSession) Send(prompt string, images []core.ImageAttachment, file
 	if isResume {
 		args = append(args, "--resume", chatID)
 	}
-	if cs.model != "" {
+	if cs.model != "" && !cs.autoModel.Load() {
 		args = append(args, "--model", cs.model)
 	}
 	args = append(args, "--workspace", cs.workDir, "--", prompt)
@@ -135,7 +140,7 @@ func (cs *cursorSession) Send(prompt string, images []core.ImageAttachment, file
 	}
 
 	cs.wg.Add(1)
-	go cs.readLoop(cmd, stdout, &stderrBuf)
+	go cs.readLoop(cmd, stdout, &stderrBuf, prompt, retryModelUnavailable)
 
 	return nil
 }
@@ -252,12 +257,22 @@ func cursorImageExt(mime string) string {
 	}
 }
 
-func (cs *cursorSession) readLoop(cmd *exec.Cmd, stdout io.ReadCloser, stderrBuf *bytes.Buffer) {
+func (cs *cursorSession) readLoop(cmd *exec.Cmd, stdout io.ReadCloser, stderrBuf *bytes.Buffer, prompt string, retryModelUnavailable bool) {
 	defer cs.wg.Done()
+	sawEvent := false
 	defer func() {
 		if err := cmd.Wait(); err != nil {
 			stderrMsg := strings.TrimSpace(stderrBuf.String())
 			if stderrMsg != "" {
+				if retryModelUnavailable && !sawEvent && cs.model != "" && isCursorModelUnavailable(stderrMsg) && cs.alive.Load() {
+					cs.autoModel.Store(true)
+					slog.Warn("cursorSession: model unavailable, retrying with auto", "model", cs.model)
+					if retryErr := cs.start(prompt, false); retryErr == nil {
+						return
+					} else {
+						stderrMsg = stderrMsg + "\nretry with auto failed: " + retryErr.Error()
+					}
+				}
 				slog.Error("cursorSession: process failed", "error", err, "stderr", stderrMsg)
 				evt := core.Event{Type: core.EventError, Error: fmt.Errorf("%s", stderrMsg)}
 				select {
@@ -286,6 +301,7 @@ func (cs *cursorSession) readLoop(cmd *exec.Cmd, stdout io.ReadCloser, stderrBuf
 			continue
 		}
 
+		sawEvent = true
 		cs.handleEvent(raw)
 	}
 
@@ -298,6 +314,12 @@ func (cs *cursorSession) readLoop(cmd *exec.Cmd, stdout io.ReadCloser, stderrBuf
 			return
 		}
 	}
+}
+
+func isCursorModelUnavailable(stderrMsg string) bool {
+	lower := strings.ToLower(stderrMsg)
+	return strings.Contains(lower, "model not available") ||
+		strings.Contains(lower, "model provider is not supported in your region")
 }
 
 func (cs *cursorSession) handleEvent(raw map[string]any) {
