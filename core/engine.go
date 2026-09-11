@@ -8589,6 +8589,9 @@ func (e *Engine) cmdModel(p Platform, msg *Message, args []string) {
 			}
 			sb.WriteString("\n")
 			sb.WriteString(e.i18n.T(MsgModelListTitle))
+			if modelListHasFallback(models) {
+				sb.WriteString(e.i18n.T(MsgModelListFallback))
+			}
 			var buttons [][]ButtonOption
 			var row []ButtonOption
 			for i, m := range models {
@@ -8672,6 +8675,15 @@ func resolveModelAlias(models []ModelOption, input string) string {
 		}
 	}
 	return input
+}
+
+func modelListHasFallback(models []ModelOption) bool {
+	for _, m := range models {
+		if m.Fallback {
+			return true
+		}
+	}
+	return false
 }
 
 func resolveModelSwitchTarget(input string, models []ModelOption) string {
@@ -11249,6 +11261,12 @@ func (e *Engine) renderModelCard(sessionKey string) *Card {
 		sb.WriteString(e.i18n.T(MsgModelDefault))
 	} else {
 		sb.WriteString(e.i18n.Tf(MsgModelCurrent, current))
+	}
+	if modelListHasFallback(models) {
+		if sb.Len() > 0 && !strings.HasSuffix(sb.String(), "\n") {
+			sb.WriteString("\n")
+		}
+		sb.WriteString(e.i18n.T(MsgModelListFallback))
 	}
 
 	var opts []CardSelectOption

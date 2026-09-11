@@ -202,11 +202,7 @@ func fetchModelsFromAgentCLI(ctx context.Context, cmd string, extraEnv []string)
 
 func cursorFallbackModels() []core.ModelOption {
 	return []core.ModelOption{
-		{Name: "claude-sonnet-4-20250514", Desc: "Claude Sonnet 4"},
-		{Name: "claude-opus-4-20250514", Desc: "Claude Opus 4"},
-		{Name: "gpt-4o", Desc: "GPT-4o"},
-		{Name: "gemini-2.5-pro", Desc: "Gemini 2.5 Pro"},
-		{Name: "cursor-small", Desc: "Cursor Small (fast)"},
+		{Name: "auto", Desc: "Auto", Fallback: true},
 	}
 }
 

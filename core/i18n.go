@@ -258,6 +258,7 @@ const (
 	MsgModelCardSwitching    MsgKey = "model_card_switching"
 	MsgModelCardSwitched     MsgKey = "model_card_switched"
 	MsgModelCardSwitchFailed MsgKey = "model_card_switch_failed"
+	MsgModelListFallback     MsgKey = "model_list_fallback"
 	MsgModelNotSupported     MsgKey = "model_not_supported"
 	MsgReasoningCurrent      MsgKey = "reasoning_current"
 	MsgReasoningChanged      MsgKey = "reasoning_changed"
@@ -2208,6 +2209,13 @@ var messages = map[MsgKey]map[Language]string{
 		LangTraditionalChinese: "可用模型:\n",
 		LangJapanese:           "利用可能なモデル:\n",
 		LangSpanish:            "Modelos disponibles:\n",
+	},
+	MsgModelListFallback: {
+		LangEnglish:            "Model list fetch failed; showing fallback only. Please retry later.\n",
+		LangChinese:            "模型列表获取失败，当前仅展示 fallback；稍后重试可恢复真实列表。\n",
+		LangTraditionalChinese: "模型列表獲取失敗，目前僅展示 fallback；稍後重試可恢復真實列表。\n",
+		LangJapanese:           "モデル一覧の取得に失敗したため、fallback のみ表示しています。しばらくしてから再試行してください。\n",
+		LangSpanish:            "No se pudo obtener la lista de modelos; solo se muestra el fallback. Inténtalo de nuevo más tarde.\n",
 	},
 	MsgModelUsage: {
 		LangEnglish:            "Usage: `/model switch <number>` or `/model switch <model_name>`",

@@ -3625,6 +3625,43 @@ func TestCmdModel_UsesInlineButtonsOnButtonOnlyPlatform(t *testing.T) {
 	}
 }
 
+func TestCmdModel_ShowsFallbackNotice(t *testing.T) {
+	p := &stubPlatformEngine{n: "plain"}
+	agent := &stubStrictModelAgent{
+		models: []ModelOption{{Name: "auto", Desc: "Auto", Fallback: true}},
+	}
+	e := NewEngine("test", agent, []Platform{p}, "", LangChinese)
+
+	e.cmdModel(p, &Message{SessionKey: "test:user1", ReplyCtx: "ctx"}, nil)
+
+	if len(p.sent) != 1 {
+		t.Fatalf("sent messages = %d, want 1", len(p.sent))
+	}
+	if !strings.Contains(p.sent[0], "模型列表获取失败") {
+		t.Fatalf("model text = %q, want fallback notice", p.sent[0])
+	}
+	if !strings.Contains(p.sent[0], "1. auto") {
+		t.Fatalf("model text = %q, want auto fallback option", p.sent[0])
+	}
+}
+
+func TestRenderModelCard_ShowsFallbackNotice(t *testing.T) {
+	agent := &stubStrictModelAgent{
+		models: []ModelOption{{Name: "auto", Desc: "Auto", Fallback: true}},
+	}
+	e := NewEngine("test", agent, nil, "", LangChinese)
+
+	card := e.renderModelCard("test:user1")
+	text := card.RenderText()
+
+	if !strings.Contains(text, "模型列表获取失败") {
+		t.Fatalf("card text = %q, want fallback notice", text)
+	}
+	if !strings.Contains(text, "auto") {
+		t.Fatalf("card text = %q, want auto fallback option", text)
+	}
+}
+
 func TestCmdModel_UpdatesActiveProviderModel(t *testing.T) {
 	p := &stubPlatformEngine{n: "plain"}
 	agent := &stubModelModeAgent{

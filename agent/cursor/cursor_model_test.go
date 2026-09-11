@@ -84,19 +84,19 @@ func TestFetchModelsFromAgentCLI_FailsGracefully(t *testing.T) {
 }
 
 func TestAvailableModels_Fallback(t *testing.T) {
-	// When agent models fails, should fall back to hardcoded list
+	// When agent models fails, only expose auto so stale fallback models cannot be selected.
 	ctx, cancel := shortTestContext(t)
 	defer cancel()
 	a := &Agent{cmd: "nonexistent-cmd-that-will-fail"}
 	models := a.AvailableModels(ctx)
-	fallback := cursorFallbackModels()
-	if len(models) != len(fallback) {
-		t.Fatalf("fallback models length = %d, want %d", len(models), len(fallback))
+	if len(models) != 1 {
+		t.Fatalf("fallback models length = %d, want 1", len(models))
 	}
-	for i := range models {
-		if models[i].Name != fallback[i].Name {
-			t.Errorf("models[%d].Name = %q, want %q", i, models[i].Name, fallback[i].Name)
-		}
+	if models[0].Name != "auto" {
+		t.Fatalf("fallback model = %q, want auto", models[0].Name)
+	}
+	if !models[0].Fallback {
+		t.Fatal("fallback model should be marked as degraded fallback")
 	}
 }
 
@@ -283,5 +283,69 @@ func TestSaveCursorImagesToDiskDownscalesReadableImages(t *testing.T) {
 	}
 	if got.Bounds().Dx() > 768 || got.Bounds().Dy() > 768 {
 		t.Fatalf("saved image bounds = %v, want max side <= 768", got.Bounds())
+	}
+}
+
+func TestCursorSession_ModelUnavailableFallsBackToAuto(t *testing.T) {
+	dir := t.TempDir()
+	cmdPath := filepath.Join(dir, "agent")
+	argsLog := filepath.Join(dir, "args.log")
+	marker := filepath.Join(dir, "failed-once")
+
+	script := `#!/bin/sh
+echo "$@" >> "` + argsLog + `"
+if [ ! -f "` + marker + `" ]; then
+	touch "` + marker + `"
+	echo "ActionRequiredError: Model not available This model provider is not supported in your region." >&2
+	exit 1
+fi
+echo '{"type":"system","session_id":"fallback-session","model":"Auto"}'
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"OK"}]}}'
+echo '{"type":"result","result":"OK","session_id":"fallback-session"}'
+`
+	if err := os.WriteFile(cmdPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake agent: %v", err)
+	}
+
+	ctx, cancel := shortTestContext(t)
+	defer cancel()
+	session, err := newCursorSession(ctx, cmdPath, dir, "gpt-5.5-medium", "force", "", nil, "")
+	if err != nil {
+		t.Fatalf("newCursorSession: %v", err)
+	}
+	defer session.Close()
+
+	if err := session.Send("hello", nil, nil); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+
+	var gotResult bool
+	for !gotResult {
+		select {
+		case evt := <-session.Events():
+			if evt.Type == "error" {
+				t.Fatalf("unexpected error event: %v", evt.Error)
+			}
+			if evt.Done {
+				gotResult = true
+			}
+		case <-ctx.Done():
+			t.Fatal("timed out waiting for fallback result")
+		}
+	}
+
+	logBytes, err := os.ReadFile(argsLog)
+	if err != nil {
+		t.Fatalf("read args log: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(logBytes)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("fake agent launches = %d, want 2; log=%q", len(lines), string(logBytes))
+	}
+	if !strings.Contains(lines[0], "--model gpt-5.5-medium") {
+		t.Fatalf("first launch args missing explicit model: %q", lines[0])
+	}
+	if strings.Contains(lines[1], "--model") || strings.Contains(lines[1], "gpt-5.5-medium") {
+		t.Fatalf("fallback launch should omit explicit model, got: %q", lines[1])
 	}
 }

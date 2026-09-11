@@ -439,9 +439,10 @@ type ReasoningEffortSwitcher interface {
 
 // ModelOption describes a selectable model.
 type ModelOption struct {
-	Name  string // model identifier passed to CLI
-	Desc  string // short description (display_name or empty)
-	Alias string // optional short alias for the /model command (e.g. "codex" for "gpt-5.3-codex")
+	Name     string // model identifier passed to CLI
+	Desc     string // short description (display_name or empty)
+	Alias    string // optional short alias for the /model command (e.g. "codex" for "gpt-5.3-codex")
+	Fallback bool   // true when returned from a degraded model-list fallback
 }
 
 // UsageReporter is an optional interface for agents that can report account or
