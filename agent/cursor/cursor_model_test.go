@@ -84,19 +84,19 @@ func TestFetchModelsFromAgentCLI_FailsGracefully(t *testing.T) {
 }
 
 func TestAvailableModels_Fallback(t *testing.T) {
-	// When agent models fails, should fall back to hardcoded list
+	// When agent models fails, only expose auto so stale fallback models cannot be selected.
 	ctx, cancel := shortTestContext(t)
 	defer cancel()
 	a := &Agent{cmd: "nonexistent-cmd-that-will-fail"}
 	models := a.AvailableModels(ctx)
-	fallback := cursorFallbackModels()
-	if len(models) != len(fallback) {
-		t.Fatalf("fallback models length = %d, want %d", len(models), len(fallback))
+	if len(models) != 1 {
+		t.Fatalf("fallback models length = %d, want 1", len(models))
 	}
-	for i := range models {
-		if models[i].Name != fallback[i].Name {
-			t.Errorf("models[%d].Name = %q, want %q", i, models[i].Name, fallback[i].Name)
-		}
+	if models[0].Name != "auto" {
+		t.Fatalf("fallback model = %q, want auto", models[0].Name)
+	}
+	if !models[0].Fallback {
+		t.Fatal("fallback model should be marked as degraded fallback")
 	}
 }
 
