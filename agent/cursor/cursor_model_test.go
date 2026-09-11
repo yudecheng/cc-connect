@@ -296,7 +296,7 @@ func TestCursorSession_ModelUnavailableFallsBackToAuto(t *testing.T) {
 echo "$@" >> "` + argsLog + `"
 if [ ! -f "` + marker + `" ]; then
 	touch "` + marker + `"
-	echo "ActionRequiredError: Model not available This model provider is not supported in your region." >&2
+	echo "Cannot use this model: gpt-5.5-medium. Available models: auto" >&2
 	exit 1
 fi
 echo '{"type":"system","session_id":"fallback-session","model":"Auto"}'
