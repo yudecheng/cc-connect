@@ -319,7 +319,8 @@ func (cs *cursorSession) readLoop(cmd *exec.Cmd, stdout io.ReadCloser, stderrBuf
 func isCursorModelUnavailable(stderrMsg string) bool {
 	lower := strings.ToLower(stderrMsg)
 	return strings.Contains(lower, "model not available") ||
-		strings.Contains(lower, "model provider is not supported in your region")
+		strings.Contains(lower, "model provider is not supported in your region") ||
+		strings.Contains(lower, "cannot use this model")
 }
 
 func (cs *cursorSession) handleEvent(raw map[string]any) {
